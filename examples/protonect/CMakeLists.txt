@@ -1,15 +1,5 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 2.6)
 
-macro(auto_detect_lib LIBNAME)
-  if ( PKG_CONFIG_FOUND )
-    string(TOLOWER ${LIBNAME} PKGCONFIGNAME)
-    pkg_check_modules(${LIBNAME} ${PKGCONFIGNAME} ${ARGN})
-  else(PKG_CONFIG_FOUND)
-    #MESSAGE("Fallback to non-pkg-config")
-    FIND_PACKAGE(${LIBNAME} ${ARGN})
-  endif(PKG_CONFIG_FOUND)
-endmacro()
-
 PROJECT(libfreenect2)
 SET(CMAKE_BUILD_TYPE RelWithDebInfo)
 
@@ -17,6 +7,7 @@ SET(MY_DIR ${libfreenect2_SOURCE_DIR})
 
 OPTION(ENABLE_CXX11 "Enable C++11 support" OFF)
 OPTION(ENABLE_OPENCL "Enable OpenCL support" ON)
+OPTION(ENABLE_CUDA "Enable CUDA support" ON)
 OPTION(ENABLE_OPENGL "Enable OpenGL support" ON)
 
 IF(ENABLE_CXX11)
@@ -24,9 +15,9 @@ IF(ENABLE_CXX11)
   CHECK_CXX_COMPILER_FLAG("-std=c++11" COMPILER_SUPPORTS_CXX11)
   CHECK_CXX_COMPILER_FLAG("-std=c++0x" COMPILER_SUPPORTS_CXX0X)
   IF(COMPILER_SUPPORTS_CXX11)
-    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
   ELSEIF(COMPILER_SUPPORTS_CXX0X)
-    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
+	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
   ELSE()
     MESSAGE(STATUS "The compiler ${CMAKE_CXX_COMPILER} has no C++11 support. Please use a different C++ compiler.")
   ENDIF()
@@ -37,6 +28,7 @@ LIST(APPEND CMAKE_MODULE_PATH ${MY_DIR}/cmake_modules)
 
 # setup threading
 INCLUDE(SetupLibfreenect2Threading)
+INCLUDE_DIRECTORIES(${LIBFREENECT2_THREADING_INCLUDE_DIR})
 
 INCLUDE(GenerateResources)
 
@@ -46,21 +38,32 @@ SET(EXECUTABLE_OUTPUT_PATH ${MY_DIR}/bin)
 #set the default path for built libraries to the "lib" directory
 SET(LIBRARY_OUTPUT_PATH ${MY_DIR}/lib)
 
+FIND_PACKAGE(OpenCL)
+
+FIND_PACKAGE(CUDA)
+
 # dependencies
-find_package(PkgConfig)    # try find PKGConfig as it will be used if found
-auto_detect_lib(LibUSB REQUIRED)
-auto_detect_lib(OpenCV REQUIRED)
-FIND_PACKAGE(TurboJPEG REQUIRED) #does not provide a package-config file
+FIND_PACKAGE(OpenCV REQUIRED)
 
-#hack for buggy libusb pkgconfig file
-if(NOT LibUSB_INCLUDE_DIR)
-  find_path(LibUSB_INCLUDE_DIR NAMES libusb.h PATHS /usr/include/libusb-1.0 )
-endif()
+# OpenCV
+INCLUDE_DIRECTORIES(${OpenCV_INCLUDE_DIR})
 
-# Add includes
-INCLUDE_DIRECTORIES("${MY_DIR}/include" ${LIBFREENECT2_THREADING_INCLUDE_DIR} ${OpenCV_INCLUDE_DIRS} ${LibUSB_INCLUDE_DIR} ${TurboJPEG_INCLUDE_DIR})
+# LibUSB
+INCLUDE_DIRECTORIES("${MY_DIR}/../../depends/libusb/include/libusb-1.0/")
+LINK_DIRECTORIES("${MY_DIR}/../../depends/libusb/lib/")
 
-if(APPLE AND NOT ${TurboJPEG_FOUND})
+IF(ENABLE_OPENGL)
+  # GLFW
+  SET(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libraries")
+  SET(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "Build the GLFW example programs")
+  SET(GLFW_BUILD_TESTS OFF CACHE BOOL "Build the GLFW test programs")
+  SET(GLFW_BUILD_DOCS OFF CACHE BOOL "Build the GLFW documentation")
+
+  ADD_SUBDIRECTORY(${MY_DIR}/../../depends/glfw_src/ ${MY_DIR}/../../depends/glfw)
+  INCLUDE_DIRECTORIES(${MY_DIR}/../../depends/glfw_src/include/)
+ENDIF(ENABLE_OPENGL)
+
+if(APPLE)
   # libjpeg-turbo
   INCLUDE_DIRECTORIES("${MY_DIR}/../../depends/libjpeg_turbo/include/")
   LINK_DIRECTORIES("${MY_DIR}/../../depends/libjpeg_turbo/lib/")
@@ -115,10 +118,9 @@ SET(SOURCES
 )
 
 SET(LIBRARIES
+  usb-1.0
   ${OpenCV_LIBS}
-  ${OpenCV_LIBRARIES}
-  ${LibUSB_LIBRARIES}
-  ${TurboJPEG_LIBRARY}
+  turbojpeg
   ${LIBFREENECT2_THREADING_LIBRARIES}
 )
 
@@ -128,41 +130,19 @@ SET(RESOURCES
   zTable.bin
 )
 
+
 IF(ENABLE_OPENGL)
-  auto_detect_lib(GLFW3)
-  
-  #Assuming local build witout global deps, ugly to to this automatic but to keep backward compatibiliy
-  if(${GLFW3_FOUND} STREQUAL "FALSE")
-    
-    MESSAGE(STATUS "Building local GLFW")
-    # GLFW
-    SET(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libraries")
-    SET(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "Build the GLFW example programs")
-    SET(GLFW_BUILD_TESTS OFF CACHE BOOL "Build the GLFW test programs")
-    SET(GLFW_BUILD_DOCS OFF CACHE BOOL "Build the GLFW documentation")
-
-    ADD_SUBDIRECTORY(${MY_DIR}/../../depends/glfw_src/ ${MY_DIR}/../../depends/glfw)
-    INCLUDE_DIRECTORIES(${MY_DIR}/../../depends/glfw_src/include/)
-    
-    LIST(APPEND LIBRARIES
-      glfw
-    )
-    
-  else()
-    INCLUDE_DIRECTORIES(${GLFW3_INCLUDE_DIRS})
-
-    LINK_DIRECTORIES(${GLFW3_LIBRARY_DIRS})
-    LIST(APPEND LIBRARIES
-      ${GLFW3_LIBRARIES}
-    )
-  endif()
-  
   SET(LIBFREENECT2_WITH_OPENGL_SUPPORT 1)
   LIST(APPEND SOURCES
     src/flextGL.c
     src/opengl_depth_packet_processor.cpp
   )
-  
+
+  LIST(APPEND LIBRARIES
+    glfw
+    ${GLFW_LIBRARIES}
+  )
+
   LIST(APPEND RESOURCES
     src/shader/debug.fs
     src/shader/default.vs
@@ -173,33 +153,51 @@ IF(ENABLE_OPENGL)
   )
 ENDIF(ENABLE_OPENGL)
 
-IF(ENABLE_OPENCL)
-  FIND_PACKAGE(OpenCL)
+IF(ENABLE_OPENCL AND OPENCL_FOUND)
+  SET(LIBFREENECT2_WITH_OPENCL_SUPPORT 1)
+  INCLUDE_DIRECTORIES(${OPENCL_INCLUDE_DIRS})
+  
+  LIST(APPEND SOURCES
+    src/opencl_depth_packet_processor.cpp
+  )
 
-  IF(OPENCL_FOUND)      
-    SET(LIBFREENECT2_WITH_OPENCL_SUPPORT 1)
-    INCLUDE_DIRECTORIES(${OPENCL_INCLUDE_DIRS})
-    
-    LIST(APPEND SOURCES
-      src/opencl_depth_packet_processor.cpp
-    )
+  LIST(APPEND LIBRARIES
+    ${OPENCL_LIBRARIES}
+  )
+  
+  LIST(APPEND RESOURCES
+    src/opencl_depth_packet_processor.cl
+  )
+ENDIF(ENABLE_OPENCL AND OPENCL_FOUND)
 
-    LIST(APPEND LIBRARIES
-      ${OPENCL_LIBRARIES}
-    )
-      
-    LIST(APPEND RESOURCES
-      src/opencl_depth_packet_processor.cl
-    )
-  ENDIF(OPENCL_FOUND)
-ENDIF(ENABLE_OPENCL)
+IF(ENABLE_CUDA AND CUDA_FOUND)
+  MESSAGE(STATUS "CUDA enabled")
+  SET(LIBFREENECT2_WITH_CUDA_SUPPORT 1)
+  SET(CUDA_PROPAGATE_HOST_FLAGS OFF)
+
+  CUDA_INCLUDE_DIRECTORIES("${MY_DIR}/include/" "${CUDA_TOOLKIT_ROOT_DIR}/samples/common/inc")
+  CUDA_COMPILE(CUDA_OBJECTS src/cuda_depth_packet_processor.cu OPTIONS -use_fast_math -Xcompiler -fPIC)
+
+  INCLUDE_DIRECTORIES(${CUDA_INCLUDE_DIRS})
+
+  LIST(APPEND SOURCES
+    src/cuda_depth_packet_processor.cpp
+    ${CUDA_OBJECTS}
+  )
+
+  LIST(APPEND LIBRARIES
+    ${CUDA_LIBRARIES}
+  )
+ENDIF(ENABLE_CUDA AND CUDA_FOUND)
 
 CONFIGURE_FILE("${MY_DIR}/include/libfreenect2/config.h.in" "${MY_DIR}/include/libfreenect2/config.h" @ONLY)
+
 GENERATE_RESOURCES(${RESOURCES_INC_FILE} ${MY_DIR} ${RESOURCES})
+
+INCLUDE_DIRECTORIES("${MY_DIR}/include")
 
 ADD_DEFINITIONS(-DRESOURCES_INC)
 ADD_LIBRARY(freenect2 SHARED ${SOURCES})
-MESSAGE("Linking with these libraries: ${LIBRARIES}")
 TARGET_LINK_LIBRARIES(freenect2 ${LIBRARIES})
   
 ADD_EXECUTABLE(Protonect
