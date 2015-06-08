@@ -4,6 +4,7 @@ PROJECT(libfreenect2)
 SET(CMAKE_BUILD_TYPE RelWithDebInfo)
 
 SET(MY_DIR ${libfreenect2_SOURCE_DIR})
+SET(DEPENDS_DIR "${MY_DIR}/../../depends" CACHE STRING "dependency directory")
 
 OPTION(ENABLE_CXX11 "Enable C++11 support" OFF)
 OPTION(ENABLE_OPENCL "Enable OpenCL support" ON)
@@ -43,31 +44,21 @@ FIND_PACKAGE(OpenCL)
 FIND_PACKAGE(CUDA)
 
 # dependencies
+FIND_PACKAGE(PkgConfig)    # try find PKGConfig as it will be used if found
+FIND_PACKAGE(LibUSB REQUIRED)
 FIND_PACKAGE(OpenCV REQUIRED)
+FIND_PACKAGE(TurboJPEG REQUIRED) #does not provide a package-config file
 
-# OpenCV
-INCLUDE_DIRECTORIES(${OpenCV_INCLUDE_DIR})
+# Add includes
+INCLUDE_DIRECTORIES(
+  "${MY_DIR}/include"
+  ${LIBFREENECT2_THREADING_INCLUDE_DIR}
+  ${OpenCV_INCLUDE_DIRS}
+  ${LibUSB_INCLUDE_DIRS}
+  ${TurboJPEG_INCLUDE_DIRS}
+)
 
-# LibUSB
-INCLUDE_DIRECTORIES("${MY_DIR}/../../depends/libusb/include/libusb-1.0/")
-LINK_DIRECTORIES("${MY_DIR}/../../depends/libusb/lib/")
-
-IF(ENABLE_OPENGL)
-  # GLFW
-  SET(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libraries")
-  SET(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "Build the GLFW example programs")
-  SET(GLFW_BUILD_TESTS OFF CACHE BOOL "Build the GLFW test programs")
-  SET(GLFW_BUILD_DOCS OFF CACHE BOOL "Build the GLFW documentation")
-
-  ADD_SUBDIRECTORY(${MY_DIR}/../../depends/glfw_src/ ${MY_DIR}/../../depends/glfw)
-  INCLUDE_DIRECTORIES(${MY_DIR}/../../depends/glfw_src/include/)
-ENDIF(ENABLE_OPENGL)
-
-if(APPLE)
-  # libjpeg-turbo
-  INCLUDE_DIRECTORIES("${MY_DIR}/../../depends/libjpeg_turbo/include/")
-  LINK_DIRECTORIES("${MY_DIR}/../../depends/libjpeg_turbo/lib/")
-endif()
+LINK_DIRECTORIES(${LibUSB_LIBRARY_DIRS})
 
 SET(RESOURCES_INC_FILE "${MY_DIR}/src/resources.inc")
 
@@ -120,7 +111,9 @@ SET(SOURCES
 SET(LIBRARIES
   usb-1.0
   ${OpenCV_LIBS}
-  turbojpeg
+  ${OpenCV_LIBRARIES}
+  ${LibUSB_LIBRARIES}
+  ${TurboJPEG_LIBRARIES}
   ${LIBFREENECT2_THREADING_LIBRARIES}
 )
 
@@ -132,6 +125,16 @@ SET(RESOURCES
 
 
 IF(ENABLE_OPENGL)
+  FIND_PACKAGE(GLFW3)
+  FIND_PACKAGE(OpenGL)
+  IF(GLFW3_FOUND)
+    INCLUDE_DIRECTORIES(${GLFW3_INCLUDE_DIRS})
+
+    LINK_DIRECTORIES(${GLFW3_LIBRARY_DIRS})
+    LIST(APPEND LIBRARIES
+      ${GLFW3_LIBRARIES}
+      ${OPENGL_gl_LIBRARY}
+    )
   SET(LIBFREENECT2_WITH_OPENGL_SUPPORT 1)
   LIST(APPEND SOURCES
     src/flextGL.c
@@ -151,6 +154,7 @@ IF(ENABLE_OPENGL)
     src/shader/stage1.fs
     src/shader/stage2.fs
   )
+  ENDIF()
 ENDIF(ENABLE_OPENGL)
 
 IF(ENABLE_OPENCL AND OPENCL_FOUND)
@@ -189,6 +193,8 @@ IF(ENABLE_CUDA AND CUDA_FOUND)
     ${CUDA_LIBRARIES}
   )
 ENDIF(ENABLE_CUDA AND CUDA_FOUND)
+
+SET(CMAKE_INSTALL_RPATH ${LibUSB_LIBDIR})
 
 CONFIGURE_FILE("${MY_DIR}/include/libfreenect2/config.h.in" "${MY_DIR}/include/libfreenect2/config.h" @ONLY)
 
