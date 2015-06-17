@@ -6,10 +6,11 @@ SET(CMAKE_BUILD_TYPE RelWithDebInfo)
 SET(MY_DIR ${libfreenect2_SOURCE_DIR})
 SET(DEPENDS_DIR "${MY_DIR}/../../depends" CACHE STRING "dependency directory")
 
-OPTION(ENABLE_CXX11 "Enable C++11 support" OFF)
+OPTION(ENABLE_CXX11 "Enable C++11 support" ON)
 OPTION(ENABLE_OPENCL "Enable OpenCL support" ON)
 OPTION(ENABLE_CUDA "Enable CUDA support" ON)
 OPTION(ENABLE_OPENGL "Enable OpenGL support" ON)
+OPTION(ENABLE_TEGRA_JPEG "Enable accelerated Tegra JPEG library" ON)
 
 IF(ENABLE_CXX11)
   INCLUDE(CheckCXXCompilerFlag)
@@ -60,7 +61,7 @@ INCLUDE_DIRECTORIES(
 
 LINK_DIRECTORIES(${LibUSB_LIBRARY_DIRS})
 
-SET(RESOURCES_INC_FILE "${MY_DIR}/src/resources.inc.h")
+SET(RESOURCES_INC_FILE "${MY_DIR}/src/resources.inc")
 
 SET(SOURCES
   include/libfreenect2/protocol/command.h
@@ -123,6 +124,24 @@ SET(RESOURCES
   zTable.bin
 )
 
+IF(ENABLE_TEGRA_JPEG AND EXISTS "/etc/nv_tegra_release")
+  FIND_LIBRARY(TEGRA_JPEG_LIBRARY jpeg PATHS /usr/lib/arm-linux-gnueabihf/tegra NO_DEFAULT_PATH)
+  IF(NOT TEGRA_JPEG_LIBRARY)
+    MESSAGE(FATAL_ERROR "Did not find Tegra JPEG library")
+  ENDIF(NOT TEGRA_JPEG_LIBRARY)
+
+  INCLUDE_DIRECTORIES("${MY_DIR}/../../depends/nv_headers")
+
+  MESSAGE(STATUS "Found Tegra hardware accelerated JPEG support")
+  SET(LIBFREENECT2_WITH_TEGRA_JPEG_SUPPORT 1)
+
+  LIST(APPEND SOURCES
+    src/tegra_jpeg_rgb_packet_processor.cpp
+  )
+  LIST(APPEND LIBRARIES
+    ${TEGRA_JPEG_LIBRARY}
+  )
+ENDIF()
 
 IF(ENABLE_OPENGL)
   FIND_PACKAGE(GLFW3)
@@ -203,32 +222,23 @@ GENERATE_RESOURCES(${RESOURCES_INC_FILE} ${MY_DIR} ${RESOURCES})
 INCLUDE_DIRECTORIES("${MY_DIR}/include")
 
 ADD_DEFINITIONS(-DRESOURCES_INC)
-ADD_LIBRARY(freenect2 OBJECT ${SOURCES})
-set_target_properties(freenect2 PROPERTIES POSITION_INDEPENDENT_CODE 1)
-ADD_LIBRARY(freenect2shared SHARED $<TARGET_OBJECTS:freenect2>)
-ADD_LIBRARY(freenect2static STATIC $<TARGET_OBJECTS:freenect2>)
-set_target_properties(freenect2shared PROPERTIES OUTPUT_NAME freenect2)
-set_target_properties(freenect2static PROPERTIES OUTPUT_NAME freenect2)
-IF(MSVC)
-  set_target_properties(freenect2static PROPERTIES OUTPUT_NAME freenect2static)
-ENDIF()
-MESSAGE("Linking with these libraries: ${LIBRARIES}")
-TARGET_LINK_LIBRARIES(freenect2shared ${LIBRARIES})
+ADD_LIBRARY(freenect2 SHARED ${SOURCES})
+TARGET_LINK_LIBRARIES(freenect2 ${LIBRARIES})
   
 ADD_EXECUTABLE(Protonect
   Protonect.cpp
 )
   
 TARGET_LINK_LIBRARIES(Protonect
-  freenect2shared
+  freenect2
 )
 
 CONFIGURE_FILE(freenect2.cmake.in "${PROJECT_BINARY_DIR}/freenect2Config.cmake" @ONLY)
 
-INSTALL(TARGETS freenect2shared DESTINATION lib)
-INSTALL(TARGETS freenect2static DESTINATION lib)
+INSTALL(TARGETS freenect2 DESTINATION lib)
 INSTALL(DIRECTORY "${MY_DIR}/include/" DESTINATION include PATTERN "*.in" EXCLUDE)
 IF(LIBFREENECT2_THREADING_TINYTHREAD)
   INSTALL(FILES  "${MY_DIR}/src/tinythread/tinythread.h" DESTINATION include/${PROJECT_NAME}/tinythread/)
 ENDIF(LIBFREENECT2_THREADING_TINYTHREAD)
 INSTALL(FILES "${PROJECT_BINARY_DIR}/freenect2Config.cmake" DESTINATION lib/cmake/freenect2/)
+  
